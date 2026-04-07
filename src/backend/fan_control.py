@@ -22,6 +22,24 @@ ASUS_HWMON = _find_hwmon("asus")
 NUM_POINTS = 8
 
 
+def get_curve_hwmon_labels():
+    """Check if asus_custom_fan_curve hwmon has its own pwm label files.
+
+    Returns {pwm_id: label} if labels exist, else empty dict.
+    """
+    if not CURVE_HWMON:
+        return {}
+    labels = {}
+    for i in (1, 2):
+        path = os.path.join(CURVE_HWMON, f"pwm{i}_label")
+        try:
+            with open(path) as f:
+                labels[i] = f.read().strip()
+        except OSError:
+            continue
+    return labels
+
+
 def _write_sysfs(path, value):
     """Write a value to a sysfs file, using tee via pkexec if permission denied."""
     try:

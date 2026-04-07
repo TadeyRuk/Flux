@@ -11,6 +11,11 @@ from gi.repository import Adw, Gtk, GLib, Gdk, Graphene
 from backend.fan_control import (
     get_fan_curve, get_fan_speeds, get_fan_labels,
     get_fan_curve_enabled, set_fan_curve, set_fan_curve_enabled,
+    get_curve_hwmon_labels,
+)
+from backend.fan_profiles import (
+    init_defaults, get_default, get_profile_names,
+    get_profile, save_profile, delete_profile,
 )
 from backend.power_profile import (
     PROFILES, PROFILE_LABELS, PROFILE_ICONS,
@@ -26,13 +31,15 @@ from backend.sensors import get_cpu_temp, get_amdgpu_temp
 class FanCurveWidget(Gtk.DrawingArea):
     """Interactive fan curve graph with draggable points."""
 
-    def __init__(self, fan_id):
+    def __init__(self, fan_id, curve_id=None):
         super().__init__()
         self.fan_id = fan_id
-        self.points = get_fan_curve(fan_id) or [
+        self.curve_id = curve_id if curve_id is not None else fan_id
+        self.DEFAULT_POINTS = [
             (30, 0), (40, 30), (50, 60), (60, 90),
             (70, 120), (80, 160), (90, 200), (100, 255),
         ]
+        self.points = get_fan_curve(self.curve_id) or list(self.DEFAULT_POINTS)
         self.dragging = -1
         self.set_size_request(400, 220)
         self.set_draw_func(self._draw)
@@ -301,14 +308,58 @@ class ThermalTab(Gtk.Box):
         fan_group = Adw.PreferencesGroup(title="Fan Curves")
         content.append(fan_group)
 
+        # Profile selector row
+        profile_row = Adw.ActionRow(title="Profile")
+        self._profile_model = Gtk.StringList()
+        self._rebuild_profile_model()
+        self._profile_dropdown = Gtk.DropDown(model=self._profile_model)
+        self._profile_dropdown.set_valign(Gtk.Align.CENTER)
+        self._profile_dropdown.connect("notify::selected", self._on_profile_selected)
+        profile_row.add_suffix(self._profile_dropdown)
+
+        add_btn = Gtk.Button(icon_name="list-add-symbolic")
+        add_btn.set_valign(Gtk.Align.CENTER)
+        add_btn.set_tooltip_text("Save current curves as a new profile")
+        add_btn.connect("clicked", self._on_add_profile)
+        profile_row.add_suffix(add_btn)
+
+        self._delete_btn = Gtk.Button(icon_name="user-trash-symbolic")
+        self._delete_btn.set_valign(Gtk.Align.CENTER)
+        self._delete_btn.set_tooltip_text("Delete selected profile")
+        self._delete_btn.set_sensitive(False)
+        self._delete_btn.connect("clicked", self._on_delete_profile)
+        profile_row.add_suffix(self._delete_btn)
+
+        fan_group.add(profile_row)
+
+        # Build curve_id mapping: fan labels from asus hwmon may not match
+        # the pwm indices in asus_custom_fan_curve hwmon.
+        # On this hardware, cpu_fan (fan1 label) is controlled by pwm2 and vice versa.
         labels = get_fan_labels()
+        curve_labels = get_curve_hwmon_labels()
+        if curve_labels:
+            # Use labels from curve hwmon to build correct mapping
+            self._curve_id_map = {}
+            for fan_id, fan_label in labels.items():
+                for pwm_id, curve_label in curve_labels.items():
+                    if curve_label == fan_label:
+                        self._curve_id_map[fan_id] = pwm_id
+                        break
+                else:
+                    self._curve_id_map[fan_id] = fan_id
+        else:
+            # No curve hwmon labels: swap mapping (confirmed on ASUS hardware)
+            self._curve_id_map = {1: 2, 2: 1}
+
         speeds = get_fan_speeds()
 
         self.fan_curves = {}
+        self.fan_toggles = {}
         self.fan_rpm_labels = {}
         for fan_id in (1, 2):
             label = labels.get(fan_id, f"Fan {fan_id}")
             rpm = speeds.get(fan_id, 0)
+            curve_id = self._curve_id_map.get(fan_id, fan_id)
 
             frame = Gtk.Frame()
             frame.set_margin_top(4)
@@ -326,7 +377,7 @@ class ThermalTab(Gtk.Box):
             self.fan_rpm_labels[fan_id] = (title, label)
             header.append(title)
 
-            enabled = get_fan_curve_enabled(fan_id)
+            enabled = get_fan_curve_enabled(curve_id)
             toggle = Gtk.Switch()
             toggle.set_active(enabled)
             toggle.set_valign(Gtk.Align.CENTER)
@@ -334,11 +385,12 @@ class ThermalTab(Gtk.Box):
             toggle.set_hexpand(True)
             toggle.set_tooltip_text("Enable custom fan curve")
             toggle.connect("state-set", self._on_fan_enable_toggled, fan_id)
+            self.fan_toggles[fan_id] = toggle
             header.append(toggle)
 
             frame_box.append(header)
 
-            curve = FanCurveWidget(fan_id)
+            curve = FanCurveWidget(fan_id, curve_id=curve_id)
             self.fan_curves[fan_id] = curve
             frame_box.append(curve)
 
@@ -347,6 +399,9 @@ class ThermalTab(Gtk.Box):
             row = Adw.ActionRow()
             row.set_child(frame)
             fan_group.add(row)
+
+        # Store defaults on first launch
+        init_defaults(self.fan_curves[1].points, self.fan_curves[2].points)
 
         # Apply button for fan curves
         apply_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -437,7 +492,8 @@ class ThermalTab(Gtk.Box):
             dialog.present()
 
     def _on_fan_enable_toggled(self, switch, state, fan_id):
-        ok, err = set_fan_curve_enabled(fan_id, state)
+        curve_id = self._curve_id_map.get(fan_id, fan_id)
+        ok, err = set_fan_curve_enabled(curve_id, state)
         if not ok:
             # Revert toggle without re-triggering signal
             GLib.idle_add(lambda: switch.set_active(not state))
@@ -453,7 +509,7 @@ class ThermalTab(Gtk.Box):
 
     def _on_apply_fan_curves(self, button):
         for fan_id, curve in self.fan_curves.items():
-            ok, err = set_fan_curve_enabled(fan_id, True)
+            ok, err = set_fan_curve_enabled(curve.curve_id, True)
             if not ok:
                 dialog = Adw.MessageDialog(
                     heading="Fan Curve Error",
@@ -463,7 +519,7 @@ class ThermalTab(Gtk.Box):
                 dialog.add_response("ok", "OK")
                 dialog.present()
                 return
-            ok, err = set_fan_curve(fan_id, curve.points)
+            ok, err = set_fan_curve(curve.curve_id, curve.points)
             if not ok:
                 dialog = Adw.MessageDialog(
                     heading="Fan Curve Error",
@@ -475,9 +531,117 @@ class ThermalTab(Gtk.Box):
                 return
 
     def _on_reset_fan_curves(self, button):
+        defaults = get_default()
         for fan_id, curve in self.fan_curves.items():
-            curve.points = get_fan_curve(fan_id) or curve.points
+            set_fan_curve_enabled(curve.curve_id, False)
+            toggle = self.fan_toggles[fan_id]
+            toggle.handler_block_by_func(self._on_fan_enable_toggled)
+            toggle.set_active(False)
+            toggle.handler_unblock_by_func(self._on_fan_enable_toggled)
+            if defaults:
+                curve.points = list(defaults[f"fan{fan_id}"])
+            else:
+                curve.points = list(curve.DEFAULT_POINTS)
+            curve.dragging = -1
             curve.queue_draw()
+        # Select "Default" in dropdown
+        self._profile_dropdown.set_selected(0)
+
+    # --- Profile management ---
+
+    def _rebuild_profile_model(self):
+        """Rebuild the dropdown string list from stored profiles."""
+        while self._profile_model.get_n_items() > 0:
+            self._profile_model.remove(0)
+        self._profile_model.append("Default")
+        for name in get_profile_names():
+            self._profile_model.append(name)
+
+    def _on_profile_selected(self, dropdown, _pspec):
+        idx = dropdown.get_selected()
+        if idx == 0:
+            # Default selected
+            self._delete_btn.set_sensitive(False)
+            defaults = get_default()
+            if defaults:
+                self._load_points(defaults)
+        elif idx != Gtk.INVALID_LIST_POSITION:
+            name = self._profile_model.get_string(idx)
+            self._delete_btn.set_sensitive(True)
+            prof = get_profile(name)
+            if prof:
+                self._load_points(prof)
+
+    def _load_points(self, data):
+        """Load fan curve points from a profile dict into the widgets."""
+        for fan_id, curve in self.fan_curves.items():
+            key = f"fan{fan_id}"
+            if key in data:
+                curve.points = list(data[key])
+                curve.dragging = -1
+                curve.queue_draw()
+
+    def _on_add_profile(self, button):
+        dialog = Adw.MessageDialog(
+            heading="Save Fan Curve Profile",
+            body="Enter a name for this fan curve profile:",
+            transient_for=self.get_root(),
+        )
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("Profile name")
+        dialog.set_extra_child(entry)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("save", "Save")
+        dialog.set_response_appearance("save", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("save")
+        dialog.set_close_response("cancel")
+
+        def on_response(dlg, response):
+            if response != "save":
+                return
+            name = entry.get_text().strip()
+            if not name:
+                return
+            save_profile(
+                name,
+                self.fan_curves[1].points,
+                self.fan_curves[2].points,
+            )
+            self._rebuild_profile_model()
+            # Select the newly added profile
+            for i in range(self._profile_model.get_n_items()):
+                if self._profile_model.get_string(i) == name:
+                    self._profile_dropdown.set_selected(i)
+                    break
+
+        dialog.connect("response", on_response)
+        dialog.present()
+
+    def _on_delete_profile(self, button):
+        idx = self._profile_dropdown.get_selected()
+        if idx == 0 or idx == Gtk.INVALID_LIST_POSITION:
+            return
+        name = self._profile_model.get_string(idx)
+        dialog = Adw.MessageDialog(
+            heading="Delete Profile",
+            body=f'Delete the profile "{name}"?',
+            transient_for=self.get_root(),
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("delete", "Delete")
+        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+
+        def on_response(dlg, response):
+            if response != "delete":
+                return
+            delete_profile(name)
+            self._rebuild_profile_model()
+            self._profile_dropdown.set_selected(0)
+
+        dialog.connect("response", on_response)
+        dialog.present()
 
     def _update_temps(self):
         cpu_temp = get_cpu_temp()
