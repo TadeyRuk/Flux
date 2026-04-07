@@ -254,20 +254,42 @@ class ThermalTab(Gtk.Box):
         gpu_box.set_margin_top(8)
         gpu_box.set_margin_bottom(8)
 
+        nvidia_usable = dgpu_info["nvidia_available"] or dgpu_info["driver"] in ("nvidia", "nouveau")
         for mode in [INTEGRATED, HYBRID, DEDICATED]:
             btn = Gtk.ToggleButton(label=MODE_LABELS[mode])
             btn.set_size_request(160, 45)
             if mode == gpu_mode:
                 btn.set_active(True)
+            if mode in (HYBRID, DEDICATED) and not nvidia_usable:
+                btn.set_sensitive(False)
+                btn.set_tooltip_text("NVIDIA kernel driver not installed")
             btn.connect("toggled", self._on_gpu_toggled, mode)
             btn.add_css_class("pill")
             self.gpu_buttons[mode] = btn
             gpu_box.append(btn)
 
+        def _gpu_subtitle(info):
+            parts = [
+                f"Power: {info['power_state']}",
+                f"Driver: {info['driver']}",
+                f"envycontrol: {'available' if info['envycontrol_available'] else 'not installed'}",
+            ]
+            return " | ".join(parts)
+
         status_row = Adw.ActionRow(
-            title="dGPU Status",
-            subtitle=f"NVIDIA: {dgpu_info['power_state']} | Driver loaded: {dgpu_info['nvidia_loaded']}",
+            title="dGPU (NVIDIA RTX)",
+            subtitle=_gpu_subtitle(dgpu_info),
         )
+        if not dgpu_info["envycontrol_available"]:
+            status_row.set_subtitle(
+                "envycontrol not installed — GPU switching unavailable. "
+                "Run: pip install envycontrol"
+            )
+        elif not dgpu_info["nvidia_available"]:
+            status_row.set_subtitle(
+                "NVIDIA kernel driver not installed — "
+                "Hybrid and dGPU modes unavailable."
+            )
         self.gpu_status_row = status_row
         gpu_group.add(status_row)
 
@@ -381,6 +403,7 @@ class ThermalTab(Gtk.Box):
     def _on_gpu_toggled(self, button, mode):
         if not button.get_active():
             return
+        prev_mode = next((m for m, b in self.gpu_buttons.items() if b.get_active() and m != mode), None)
         for m, btn in self.gpu_buttons.items():
             if m != mode:
                 btn.handler_block_by_func(self._on_gpu_toggled)
@@ -397,7 +420,21 @@ class ThermalTab(Gtk.Box):
             dialog.add_response("ok", "OK")
             dialog.present()
         elif not ok:
-            self.gpu_status_row.set_subtitle(f"Error: {msg}")
+            # Revert button to previous mode
+            button.handler_block_by_func(self._on_gpu_toggled)
+            button.set_active(False)
+            button.handler_unblock_by_func(self._on_gpu_toggled)
+            if prev_mode and prev_mode in self.gpu_buttons:
+                self.gpu_buttons[prev_mode].handler_block_by_func(self._on_gpu_toggled)
+                self.gpu_buttons[prev_mode].set_active(True)
+                self.gpu_buttons[prev_mode].handler_unblock_by_func(self._on_gpu_toggled)
+            dialog = Adw.MessageDialog(
+                heading="GPU Switch Failed",
+                body=msg,
+                transient_for=self.get_root(),
+            )
+            dialog.add_response("ok", "OK")
+            dialog.present()
 
     def _on_fan_enable_toggled(self, switch, state, fan_id):
         ok, err = set_fan_curve_enabled(fan_id, state)
@@ -416,6 +453,16 @@ class ThermalTab(Gtk.Box):
 
     def _on_apply_fan_curves(self, button):
         for fan_id, curve in self.fan_curves.items():
+            ok, err = set_fan_curve_enabled(fan_id, True)
+            if not ok:
+                dialog = Adw.MessageDialog(
+                    heading="Fan Curve Error",
+                    body=f"Fan {fan_id} enable: {err}",
+                    transient_for=self.get_root(),
+                )
+                dialog.add_response("ok", "OK")
+                dialog.present()
+                return
             ok, err = set_fan_curve(fan_id, curve.points)
             if not ok:
                 dialog = Adw.MessageDialog(

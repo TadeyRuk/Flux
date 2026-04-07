@@ -130,4 +130,4 @@ def set_fan_curve_enabled(fan_id, enabled):
     if not CURVE_HWMON:
         return False, "hwmon not found"
     path = os.path.join(CURVE_HWMON, f"pwm{fan_id}_enable")
-    return _write_sysfs(path, "1" if enabled else "2")
+    return _write_sysfs(path, "1" if enabled else "0")
