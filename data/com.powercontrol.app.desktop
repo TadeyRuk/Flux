@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Power Control
+Comment=Thermal, power, and GPU management
+Exec=python3 /home/tadey/power-control/src/main.py
+Icon=power-profile-performance-symbolic
+Terminal=false
+Type=Application
+Categories=System;Settings;HardwareSettings;
+Keywords=fan;power;gpu;thermal;
