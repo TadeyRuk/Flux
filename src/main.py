@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Power Control Panel — ASUS Linux laptop power/thermal management."""
+"""Flux — ASUS Linux laptop power/thermal management."""
 
 import sys
 import gi
@@ -30,7 +30,7 @@ CSS = b"""
 class PowerControlApp(Adw.Application):
     def __init__(self):
         super().__init__(
-            application_id="com.powercontrol.app",
+            application_id="com.flux.app",
             flags=Gio.ApplicationFlags.DEFAULT_FLAGS,
         )
         self.style_manager = Adw.StyleManager.get_default()

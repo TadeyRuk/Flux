@@ -5,7 +5,7 @@ import sqlite3
 import time
 
 
-DB_PATH = os.path.expanduser("~/.local/share/powercontrol/history.db")
+DB_PATH = os.path.expanduser("~/.local/share/flux/history.db")
 
 
 def _get_conn():

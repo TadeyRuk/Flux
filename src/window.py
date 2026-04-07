@@ -15,7 +15,7 @@ from ui.history_tab import HistoryTab
 class PowerControlWindow(Adw.ApplicationWindow):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.set_title("Power Control")
+        self.set_title("Flux")
         self.set_default_size(900, 650)
 
         # Main layout

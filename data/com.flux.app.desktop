@@ -1,9 +1,10 @@
 [Desktop Entry]
-Name=Power Control
-Comment=Thermal, power, and GPU management
+Name=Flux
+Comment=Fan curves, power profiles and GPU management
 Exec=python3 /home/tadey/power-control/src/main.py
-Icon=power-profile-performance-symbolic
+Icon=flux
 Terminal=false
 Type=Application
 Categories=System;Settings;HardwareSettings;
-Keywords=fan;power;gpu;thermal;
+Keywords=fan;power;gpu;thermal;asus;flux;
+StartupNotify=true
