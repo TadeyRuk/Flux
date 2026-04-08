@@ -11,7 +11,7 @@ from gi.repository import Adw, Gtk, GLib, Gdk, Graphene
 from backend.fan_control import (
     get_fan_curve, get_fan_speeds, get_fan_labels,
     get_fan_curve_enabled, set_fan_curve, set_fan_curve_enabled,
-    get_curve_hwmon_labels,
+    get_curve_hwmon_labels, apply_fan_curve,
 )
 from backend.fan_profiles import (
     init_defaults, get_default, get_profile_names,
@@ -261,6 +261,7 @@ class ThermalTab(Gtk.Box):
         gpu_box.set_margin_top(8)
         gpu_box.set_margin_bottom(8)
 
+        nouveau_active = dgpu_info["driver"] == "nouveau"
         nvidia_usable = dgpu_info["nvidia_available"] or dgpu_info["driver"] in ("nvidia", "nouveau")
         for mode in [INTEGRATED, HYBRID, DEDICATED]:
             btn = Gtk.ToggleButton(label=MODE_LABELS[mode])
@@ -291,6 +292,11 @@ class ThermalTab(Gtk.Box):
             status_row.set_subtitle(
                 "envycontrol not installed — GPU switching unavailable. "
                 "Run: pip install envycontrol"
+            )
+        elif nouveau_active:
+            status_row.set_subtitle(
+                "nouveau driver active — GPU switching may require a reboot "
+                "after applying to take full effect."
             )
         elif not dgpu_info["nvidia_available"]:
             status_row.set_subtitle(
@@ -332,26 +338,22 @@ class ThermalTab(Gtk.Box):
 
         fan_group.add(profile_row)
 
-        # Build curve_id mapping: fan labels from asus hwmon may not match
-        # the pwm indices in asus_custom_fan_curve hwmon.
-        # On this hardware, cpu_fan (fan1 label) is controlled by pwm2 and vice versa.
-        labels = get_fan_labels()
-        curve_labels = get_curve_hwmon_labels()
-        if curve_labels:
-            # Use labels from curve hwmon to build correct mapping
-            self._curve_id_map = {}
-            for fan_id, fan_label in labels.items():
-                for pwm_id, curve_label in curve_labels.items():
-                    if curve_label == fan_label:
-                        self._curve_id_map[fan_id] = pwm_id
-                        break
-                else:
-                    self._curve_id_map[fan_id] = fan_id
-        else:
-            # No curve hwmon labels: swap mapping (confirmed on ASUS hardware)
-            self._curve_id_map = {1: 2, 2: 1}
+        # Fan mapping swap setting
+        swap_row = Adw.ActionRow(
+            title="Swap Fan Mapping",
+            subtitle="Switch which physical fan corresponds to which control curve",
+        )
+        self._swap_switch = Gtk.Switch()
+        self._swap_switch.set_valign(Gtk.Align.CENTER)
+        self._swap_switch.set_active(True)  # Default to True as it was hardcoded before
+        self._swap_switch.connect("state-set", self._on_swap_toggled)
+        swap_row.add_suffix(self._swap_switch)
+        fan_group.add(swap_row)
+
+        self._update_curve_id_map()
 
         speeds = get_fan_speeds()
+        labels = get_fan_labels()
 
         self.fan_curves = {}
         self.fan_toggles = {}
@@ -440,6 +442,41 @@ class ThermalTab(Gtk.Box):
         # Update temps periodically
         GLib.timeout_add_seconds(2, self._update_temps)
 
+    def _update_curve_id_map(self):
+        """Build curve_id mapping based on hardware labels or user swap setting."""
+        labels = get_fan_labels()
+        curve_labels = get_curve_hwmon_labels()
+        self._curve_id_map = {}
+        
+        if curve_labels:
+            # Use labels from curve hwmon to build correct mapping
+            for fan_id, fan_label in labels.items():
+                for pwm_id, curve_label in curve_labels.items():
+                    if curve_label == fan_label:
+                        self._curve_id_map[fan_id] = pwm_id
+                        break
+                else:
+                    self._curve_id_map[fan_id] = fan_id
+        else:
+            # No curve hwmon labels: use user preference
+            if self._swap_switch.get_active():
+                self._curve_id_map = {1: 2, 2: 1}
+            else:
+                self._curve_id_map = {1: 1, 2: 2}
+        
+        # Update widget curve_ids if they exist
+        if hasattr(self, "fan_curves"):
+            for fan_id, curve in self.fan_curves.items():
+                curve.curve_id = self._curve_id_map.get(fan_id, fan_id)
+
+    def _on_swap_toggled(self, switch, state):
+        self._update_curve_id_map()
+        # Refresh current curve data from hardware with new mapping
+        for fan_id, curve in self.fan_curves.items():
+            curve.points = get_fan_curve(curve.curve_id) or list(curve.DEFAULT_POINTS)
+            curve.queue_draw()
+        return False
+
     def _on_profile_toggled(self, button, profile):
         if not button.get_active():
             return
@@ -492,8 +529,17 @@ class ThermalTab(Gtk.Box):
             dialog.present()
 
     def _on_fan_enable_toggled(self, switch, state, fan_id):
-        curve_id = self._curve_id_map.get(fan_id, fan_id)
-        ok, err = set_fan_curve_enabled(curve_id, state)
+        curve = self.fan_curves.get(fan_id)
+        if not curve:
+            return True
+        
+        # If enabling, use apply_fan_curve to write current widget points
+        # If disabling, just set enable to 0
+        if state:
+            ok, err = apply_fan_curve(curve.curve_id, curve.points, enabled=True)
+        else:
+            ok, err = set_fan_curve_enabled(curve.curve_id, False)
+            
         if not ok:
             # Revert toggle without re-triggering signal
             GLib.idle_add(lambda: switch.set_active(not state))
@@ -509,21 +555,12 @@ class ThermalTab(Gtk.Box):
 
     def _on_apply_fan_curves(self, button):
         for fan_id, curve in self.fan_curves.items():
-            ok, err = set_fan_curve_enabled(curve.curve_id, True)
+            # Use the new batched apply function which writes points THEN enables
+            ok, err = apply_fan_curve(curve.curve_id, curve.points, enabled=True)
             if not ok:
                 dialog = Adw.MessageDialog(
                     heading="Fan Curve Error",
-                    body=f"Fan {fan_id} enable: {err}",
-                    transient_for=self.get_root(),
-                )
-                dialog.add_response("ok", "OK")
-                dialog.present()
-                return
-            ok, err = set_fan_curve(curve.curve_id, curve.points)
-            if not ok:
-                dialog = Adw.MessageDialog(
-                    heading="Fan Curve Error",
-                    body=f"Fan {fan_id}: {err}",
+                    body=f"Fan {fan_id} ({curve.curve_id}): {err}",
                     transient_for=self.get_root(),
                 )
                 dialog.add_response("ok", "OK")
