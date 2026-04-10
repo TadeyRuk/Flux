@@ -9,7 +9,7 @@ from gi.repository import Adw, Gtk, GLib, Pango
 
 from backend.process_monitor import (
     get_top_processes, get_system_usage,
-    suspend_process, resume_process, kill_process,
+    suspend_process, resume_process, kill_process, is_os_process
 )
 from backend.sensors import get_cpu_temp, get_amdgpu_temp, get_amdgpu_busy
 from backend.history_db import record_snapshot
@@ -116,8 +116,42 @@ class MonitorTab(Gtk.Box):
         self.set_margin_start(12)
         self.set_margin_end(12)
 
+        header_card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_card.add_css_class("dashboard-header")
+        header_card.set_margin_bottom(10)
+
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        title = Gtk.Label(label="System Monitor")
+        title.add_css_class("title-3")
+        title.add_css_class("panel-heading")
+        title.set_halign(Gtk.Align.START)
+        subtitle = Gtk.Label(label="Real-time load, temperatures, and active processes")
+        subtitle.add_css_class("dim-label")
+        subtitle.set_halign(Gtk.Align.START)
+        title_box.append(title)
+        title_box.append(subtitle)
+
+        stats_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        stats_box.set_hexpand(True)
+        stats_box.set_halign(Gtk.Align.END)
+        self.cpu_chip = Gtk.Label(label="CPU --")
+        self.cpu_chip.add_css_class("subtle-chip")
+        self.mem_chip = Gtk.Label(label="RAM --")
+        self.mem_chip.add_css_class("subtle-chip")
+        self.temp_chip = Gtk.Label(label="Temp --")
+        self.temp_chip.add_css_class("subtle-chip")
+        stats_box.append(self.cpu_chip)
+        stats_box.append(self.mem_chip)
+        stats_box.append(self.temp_chip)
+
+        header_card.append(title_box)
+        header_card.append(stats_box)
+        self.append(header_card)
+
         # Utilization graphs
         graphs_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        graphs_box.add_css_class("panel-card")
+        graphs_box.set_margin_bottom(8)
 
         self.cpu_graph = UtilizationGraph("CPU", color=(0.35, 0.7, 1.0))
         self.mem_graph = UtilizationGraph("Memory", color=(0.9, 0.4, 0.5))
@@ -140,6 +174,8 @@ class MonitorTab(Gtk.Box):
         # Process header
         proc_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         proc_header.set_margin_bottom(4)
+        proc_icon = Gtk.Image.new_from_icon_name("view-list-symbolic")
+        proc_header.append(proc_icon)
         lbl = Gtk.Label(label="Processes")
         lbl.add_css_class("heading")
         lbl.set_halign(Gtk.Align.START)
@@ -165,6 +201,7 @@ class MonitorTab(Gtk.Box):
 
         # Scrollable process list
         scroll = Gtk.ScrolledWindow()
+        scroll.add_css_class("panel-card")
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll.set_vexpand(True)
         scroll.set_min_content_height(200)
@@ -181,12 +218,15 @@ class MonitorTab(Gtk.Box):
         usage = get_system_usage()
         self.cpu_graph.push(usage["cpu_percent"])
         self.mem_graph.push(usage["mem_percent"])
+        self.cpu_chip.set_text(f"CPU {usage['cpu_percent']:.0f}%")
+        self.mem_chip.set_text(f"RAM {usage['mem_percent']:.0f}%")
 
         gpu_busy = get_amdgpu_busy()
         self.gpu_graph.push(gpu_busy if gpu_busy is not None else 0)
 
         cpu_temp = get_cpu_temp()
         self.temp_graph.push(cpu_temp if cpu_temp is not None else 0)
+        self.temp_chip.set_text(f"Temp {cpu_temp:.0f} C" if cpu_temp is not None else "Temp N/A")
 
         # Process list
         procs = get_top_processes(15)
@@ -222,6 +262,7 @@ class MonitorTab(Gtk.Box):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         row.set_margin_top(1)
         row.set_margin_bottom(1)
+        row.add_css_class("proc-row")
 
         # Name
         name_lbl = Gtk.Label(label=proc["name"])
@@ -267,12 +308,14 @@ class MonitorTab(Gtk.Box):
             resume_btn = Gtk.Button(label="Resume")
             resume_btn.add_css_class("flat")
             resume_btn.set_size_request(65, 28)
+            resume_btn.set_child(self._make_action_content("Resume", "media-playback-start-symbolic"))
             resume_btn.connect("clicked", self._on_resume, pid)
             btn_box.append(resume_btn)
         else:
             pause_btn = Gtk.Button(label="Pause")
             pause_btn.add_css_class("flat")
             pause_btn.set_size_request(55, 28)
+            pause_btn.set_child(self._make_action_content("Pause", "media-playback-pause-symbolic"))
             pause_btn.connect("clicked", self._on_suspend, pid)
             btn_box.append(pause_btn)
 
@@ -280,6 +323,7 @@ class MonitorTab(Gtk.Box):
         kill_btn.add_css_class("flat")
         kill_btn.add_css_class("destructive-action")
         kill_btn.set_size_request(45, 28)
+        kill_btn.set_child(self._make_action_content("Kill", "process-stop-symbolic"))
         kill_btn.connect("clicked", self._on_kill, pid, proc["name"])
         btn_box.append(kill_btn)
 
@@ -287,6 +331,25 @@ class MonitorTab(Gtk.Box):
         return row
 
     def _on_suspend(self, button, pid):
+        if is_os_process(pid):
+            dialog = Adw.MessageDialog(
+                heading="Warning",
+                body="Suspending a system process may cause instability.",
+                transient_for=self.get_root(),
+            )
+            dialog.add_response("cancel", "Cancel")
+            dialog.add_response("suspend", "Suspend Anyway")
+            dialog.set_response_appearance("suspend", Adw.ResponseAppearance.DESTRUCTIVE)
+            dialog.connect("response", self._on_suspend_confirm, pid)
+            dialog.present()
+        else:
+            self._do_suspend(pid)
+
+    def _on_suspend_confirm(self, dialog, response, pid):
+        if response == "suspend":
+            self._do_suspend(pid)
+
+    def _do_suspend(self, pid):
         ok, err = suspend_process(pid)
         if ok:
             self._suspended_pids.add(pid)
@@ -297,9 +360,13 @@ class MonitorTab(Gtk.Box):
             self._suspended_pids.discard(pid)
 
     def _on_kill(self, button, pid, name):
+        warning = ""
+        if is_os_process(pid):
+            warning = "\n\nWarning: This is a system process. Killing it may cause system instability."
+
         dialog = Adw.MessageDialog(
             heading="Kill Process?",
-            body=f"Kill '{name}' (PID {pid})?",
+            body=f"Kill '{name}' (PID {pid})?{warning}",
             transient_for=self.get_root(),
         )
         dialog.add_response("cancel", "Cancel")
@@ -312,6 +379,17 @@ class MonitorTab(Gtk.Box):
         if response == "kill":
             kill_process(pid)
             self._suspended_pids.discard(pid)
+
+    def _make_action_content(self, label, icon_name):
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        box.set_halign(Gtk.Align.CENTER)
+        icon = Gtk.Image.new_from_icon_name(icon_name)
+        icon.set_valign(Gtk.Align.CENTER)
+        text = Gtk.Label(label=label)
+        text.set_valign(Gtk.Align.CENTER)
+        box.append(icon)
+        box.append(text)
+        return box
 
     def stop(self):
         if self._timer_id:

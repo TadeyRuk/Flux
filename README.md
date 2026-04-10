@@ -1,93 +1,132 @@
 # Flux
 
-A GTK4/libadwaita power and thermal management app for ASUS Linux laptops with AMD + NVIDIA hybrid graphics.
+<p align="center">
+  <img src="flux.svg" alt="Flux logo" width="120" height="120">
+</p>
 
-## Features
+Flux is a GTK4/libadwaita power and thermal control app for Linux laptops, focused on ASUS AMD systems with optional NVIDIA hybrid graphics.
 
-### Thermal & Power
-- **Power Profiles** — Switch between Eco, Balanced, and Turbo modes via `power-profiles-daemon`
-- **GPU Mode Switching** — Toggle between iGPU-only (AMD), Hybrid, and dGPU-only (NVIDIA) using `envycontrol`
-- **Custom Fan Curves** — Interactive 8-point drag-and-drop fan curve editor for CPU and GPU fans via the `asus_custom_fan_curve` sysfs interface
-- **Live Temperatures** — Real-time CPU (`k10temp`) and iGPU (`amdgpu`) temperature readouts, updated every 2s
+It provides power profile control, GPU mode switching, fan curve editing, live monitoring, and historical process usage in one desktop app.
 
-### System Monitor
-- **Utilization Graphs** — Rolling line charts for CPU, memory, iGPU usage, and CPU temperature (60s window)
-- **Process Manager** — Top userspace processes by CPU usage with pause (SIGSTOP), resume (SIGCONT), and kill actions
+## Highlights
 
-### Resource History
-- **Usage Tracking** — SQLite-backed historical recording of per-process CPU and memory usage
-- **Top Apps Charts** — Horizontal bar charts showing top resource consumers over 1h, 6h, 24h, or 7-day windows
+- Thermal and power management:
+  - Switch between power profiles (`power-saver`, `balanced`, `performance`)
+  - Switch GPU mode (`integrated`, `hybrid`, `dedicated`) through `envycontrol`
+  - Edit 8-point CPU/GPU fan curves through ASUS `asus_custom_fan_curve`
+  - Live CPU and iGPU temperature readouts
+- Live system monitor:
+  - Rolling 60-second graphs for CPU, memory, iGPU utilization, and temperature
+  - Process list with pause (`SIGSTOP`), resume (`SIGCONT`), and kill actions
+- Historical usage insights:
+  - SQLite-backed process CPU/memory samples
+  - Top consumer charts for 1h, 6h, 24h, and 7d windows
 
-## Install
+## Requirements
+
+- Linux desktop with GTK4/libadwaita support
+- Python 3
+- PyGObject (`python3-gobject`)
+- `psutil`
+- `power-profiles-daemon` (required for power profile switching)
+- `envycontrol` (optional, required for GPU mode switching)
+- ASUS kernel support for fan curves (`asus_wmi` / `asus_custom_fan_curve`)
+
+### Fedora Packages
 
 ```bash
-./install.sh
+sudo dnf install gtk4 libadwaita python3-gobject python3-psutil
+pip install envycontrol  # optional
 ```
 
-This copies the app to `~/.local/share/flux/`, installs the `flux` binary to `~/.local/bin/`, registers the icon, and adds a `.desktop` entry for the GNOME app grid.
+## Quick Start
 
-## Launch
-
-```bash
-flux
-```
-
-Or search **Flux** in the GNOME app grid.
-
-To run directly from the source tree:
+### Run from Source
 
 ```bash
 ./run.sh
 ```
 
-## Dependencies
-
-- Python 3
-- GTK 4 + libadwaita (via PyGObject)
-- `psutil`
-- `power-profiles-daemon` (for power profile switching)
-- `envycontrol` (optional, for GPU mode switching: `pip install envycontrol`)
-- ASUS Linux kernel modules (`asus-wmi` / `asus_custom_fan_curve`) for fan control
-
-### Fedora
+### Install for Current User
 
 ```bash
-sudo dnf install gtk4 libadwaita python3-gobject python3-psutil
-pip install envycontrol   # optional
+./install.sh
 ```
 
-## Permissions
+`install.sh` performs a user-local install and does not require system-wide packaging:
 
-Fan curve writes and GPU mode switching require elevated privileges. Flux uses `pkexec` — a Polkit authentication dialog will appear when needed. No password stored, no persistent root access.
+- App files: `~/.local/share/flux/`
+- Launcher binary: `~/.local/bin/flux`
+- Desktop entry: `~/.local/share/applications/com.flux.app.desktop`
+- Icon: `~/.local/share/icons/hicolor/scalable/apps/flux.svg`
 
-## Hardware
+Launch after install:
 
-Built for ASUS laptops running Linux with:
-- AMD Ryzen CPU (`k10temp` hwmon)
-- AMD Radeon iGPU (`amdgpu` hwmon)
-- NVIDIA dGPU (optional, hybrid/dedicated switching)
-- ASUS fan curve sysfs interface (`asus_custom_fan_curve` hwmon)
-
-## Project Structure
-
+```bash
+flux
 ```
-flux.svg             # App icon (SVG)
-install.sh           # User-level installer
-run.sh               # Run from source tree
+
+Or open it from your desktop app grid as **Flux**.
+
+## Security and Privileges
+
+Flux runs as a regular user process by default.
+
+Only operations that require elevated permissions trigger Polkit authentication via `pkexec`:
+
+- Writing fan curves
+- Switching GPU mode
+
+Flux does not keep persistent root privileges.
+
+## Hardware Compatibility
+
+Designed primarily for ASUS Linux laptops, with these expected interfaces:
+
+- CPU temperature via `k10temp`
+- AMD iGPU temperature/utilization via `amdgpu`
+- Optional NVIDIA dGPU for hybrid/dedicated switching
+- ASUS fan curve hwmon interface (`asus_custom_fan_curve`)
+
+If your hardware paths differ, some controls may be unavailable.
+
+## Project Layout
+
+```text
+flux.svg
+install.sh
+run.sh
 src/
-  main.py            # Application entry (Adw.Application, com.flux.app)
-  window.py          # Main window, 3-tab layout
+  main.py
+  window.py
   backend/
-    sensors.py       # Hardware sensor readings (temps, GPU, battery)
-    fan_control.py   # Fan curve read/write via ASUS sysfs + pkexec
-    gpu_switch.py    # GPU mode switching (envycontrol)
-    power_profile.py # Power profile management (DBus)
-    process_monitor.py  # Process monitoring (psutil)
-    history_db.py    # SQLite resource usage history (~/.local/share/flux/)
+    sensors.py
+    fan_control.py
+    fan_profiles.py
+    gpu_switch.py
+    power_profile.py
+    process_monitor.py
+    history_db.py
   ui/
-    thermal_tab.py   # Thermal & Power tab
-    monitor_tab.py   # System Monitor tab
-    history_tab.py   # Resource History tab
+    thermal_tab.py
+    monitor_tab.py
+    history_tab.py
 data/
-  com.flux.app.desktop  # Desktop entry
+  com.flux.app.desktop
 ```
+
+## Troubleshooting
+
+- `flux: command not found` after install:
+  - Ensure `~/.local/bin` is in your `PATH`
+- Power profile actions fail:
+  - Verify `power-profiles-daemon` is installed and running
+- GPU switching unavailable:
+  - Install `envycontrol` and confirm supported hybrid graphics setup
+- Fan controls unavailable:
+  - Confirm ASUS fan curve sysfs interface is present and writable (with Polkit when prompted)
+
+## License
+
+No license file is currently included in this repository.
+Add a `LICENSE` file to define redistribution and usage terms for production distribution.

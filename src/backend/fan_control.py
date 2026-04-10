@@ -22,6 +22,28 @@ ASUS_HWMON = _find_hwmon("asus")
 NUM_POINTS = 8
 
 
+def _read_pwm_enable_mode(path):
+    """Read pwmX_enable mode as string, or None on failure."""
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def _preferred_disable_mode(path):
+    """Pick a disable/auto mode compatible with the current driver.
+
+    Some ASUS platforms expose pwmX_enable values where custom curve is `1`
+    and firmware/auto mode is `2` (not `0`). If current mode already looks
+    like this scheme, prefer `2` for disabling.
+    """
+    current = _read_pwm_enable_mode(path)
+    if current in ("1", "2"):
+        return "2"
+    return "0"
+
+
 def get_curve_hwmon_labels():
     """Check if asus_custom_fan_curve hwmon has its own pwm label files.
 
@@ -40,26 +62,52 @@ def get_curve_hwmon_labels():
     return labels
 
 
-def _write_sysfs(path, value):
-    """Write a value to a sysfs file, using tee via pkexec if permission denied."""
-    try:
-        with open(path, "w") as f:
-            f.write(str(value))
+def _write_sysfs_batch(writes):
+    """Write multiple values to sysfs files in a single pkexec call.
+    writes = list of (path, value) tuples.
+    Returns (success, error_msg).
+    """
+    if not writes:
         return True, ""
-    except PermissionError:
-        try:
-            result = subprocess.run(
-                ["pkexec", "tee", path],
-                input=str(value), capture_output=True, text=True, timeout=30,
-            )
-            if result.returncode == 0:
-                return True, ""
-            return False, result.stderr.strip() or "pkexec tee failed"
-        except FileNotFoundError:
-            return False, "pkexec not found"
-        except subprocess.TimeoutExpired:
-            return False, "Timeout waiting for authentication"
-    except OSError as e:
+
+    # Try writing directly first (if running as root or files are writable)
+    try:
+        failed_writes = []
+        for path, value in writes:
+            try:
+                with open(path, "w") as f:
+                    f.write(str(value))
+            except PermissionError:
+                failed_writes.append((path, value))
+            except OSError as e:
+                return False, f"Error writing {path}: {e}"
+        
+        if not failed_writes:
+            return True, ""
+        
+        # Some or all writes failed with PermissionError, use pkexec for the rest
+        # Build a single shell command to perform all writes
+        cmds = []
+        for path, value in failed_writes:
+            # Use printf to avoid issues with echo and special characters, though values are just ints
+            cmds.append(f"printf '%s' '{value}' | tee '{path}'")
+        
+        full_cmd = " && ".join(cmds) + " > /dev/null"
+        
+        result = subprocess.run(
+            ["pkexec", "sh", "-c", full_cmd],
+            capture_output=True, text=True, timeout=30,
+        )
+        
+        if result.returncode == 0:
+            return True, ""
+        return False, result.stderr.strip() or f"pkexec failed with code {result.returncode}"
+        
+    except FileNotFoundError:
+        return False, "pkexec not found"
+    except subprocess.TimeoutExpired:
+        return False, "Timeout waiting for authentication"
+    except Exception as e:
         return False, str(e)
 
 
@@ -102,6 +150,8 @@ def get_fan_curve(fan_id):
         try:
             temp_path = os.path.join(CURVE_HWMON, f"pwm{fan_id}_auto_point{i}_temp")
             pwm_path = os.path.join(CURVE_HWMON, f"pwm{fan_id}_auto_point{i}_pwm")
+            if not os.path.exists(temp_path) or not os.path.exists(pwm_path):
+                break
             with open(temp_path) as f:
                 temp = int(f.read().strip())
             with open(pwm_path) as f:
@@ -112,23 +162,52 @@ def get_fan_curve(fan_id):
     return points
 
 
-def set_fan_curve(fan_id, points):
-    """Write 8-point fan curve. points = list of (temp, pwm).
+def apply_fan_curve(fan_id, points, enabled=True):
+    """Write fan curve points and enable state in a single operation.
+    points = list of (temp, pwm).
     Returns (success, error_msg).
-    Uses pkexec for privilege escalation if needed.
     """
     if not CURVE_HWMON:
         return False, "asus_custom_fan_curve hwmon not found"
+    
+    writes = []
+    # 1. Add all points to the batch
     for i, (temp, pwm) in enumerate(points, 1):
         temp_path = os.path.join(CURVE_HWMON, f"pwm{fan_id}_auto_point{i}_temp")
         pwm_path = os.path.join(CURVE_HWMON, f"pwm{fan_id}_auto_point{i}_pwm")
-        ok, err = _write_sysfs(temp_path, int(temp))
-        if not ok:
-            return False, f"Point {i} temp: {err}"
-        ok, err = _write_sysfs(pwm_path, int(pwm))
-        if not ok:
-            return False, f"Point {i} pwm: {err}"
-    return True, ""
+        
+        # Verify these files exist before adding to batch
+        if os.path.exists(temp_path):
+            writes.append((temp_path, int(temp)))
+        if os.path.exists(pwm_path):
+            writes.append((pwm_path, int(pwm)))
+            
+    # 2. Force controller re-evaluation and then set final enable state.
+    # Writing 1 when already enabled may not immediately re-apply the new
+    # curve on some ASUS EC implementations.
+    enable_path = os.path.join(CURVE_HWMON, f"pwm{fan_id}_enable")
+    disable_mode = _preferred_disable_mode(enable_path)
+    if enabled:
+        writes.append((enable_path, disable_mode))
+        writes.append((enable_path, "1"))
+    else:
+        writes.append((enable_path, disable_mode))
+    
+    return _write_sysfs_batch(writes)
+
+
+def set_fan_curve(fan_id, points):
+    """Write 8-point fan curve. points = list of (temp, pwm).
+    Returns (success, error_msg).
+    Note: Usually you should use apply_fan_curve instead.
+    """
+    writes = []
+    for i, (temp, pwm) in enumerate(points, 1):
+        temp_path = os.path.join(CURVE_HWMON, f"pwm{fan_id}_auto_point{i}_temp")
+        pwm_path = os.path.join(CURVE_HWMON, f"pwm{fan_id}_auto_point{i}_pwm")
+        writes.append((temp_path, int(temp)))
+        writes.append((pwm_path, int(pwm)))
+    return _write_sysfs_batch(writes)
 
 
 def get_fan_curve_enabled(fan_id):
@@ -148,4 +227,18 @@ def set_fan_curve_enabled(fan_id, enabled):
     if not CURVE_HWMON:
         return False, "hwmon not found"
     path = os.path.join(CURVE_HWMON, f"pwm{fan_id}_enable")
-    return _write_sysfs(path, "1" if enabled else "0")
+    if enabled:
+        return _write_sysfs_batch([(path, "1")])
+
+    preferred = _preferred_disable_mode(path)
+    ok, err = _write_sysfs_batch([(path, preferred)])
+    if ok:
+        return True, ""
+
+    # Some devices accept only one of {0,2}; retry the alternative when the
+    # kernel reports EINVAL.
+    if "Invalid argument" in (err or ""):
+        fallback = "2" if preferred == "0" else "0"
+        return _write_sysfs_batch([(path, fallback)])
+
+    return False, err

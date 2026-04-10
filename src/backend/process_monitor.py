@@ -73,6 +73,7 @@ def get_system_usage():
     """Get overall system usage."""
     cpu = psutil.cpu_percent(interval=None)
     mem = psutil.virtual_memory()
+
     return {
         "cpu_percent": cpu,
         "cpu_per_core": psutil.cpu_percent(percpu=True),
@@ -82,6 +83,27 @@ def get_system_usage():
         "swap_percent": psutil.swap_memory().percent,
     }
 
+
+def is_os_process(pid):
+    """Check if a process is tied to the OS or crucial to the system."""
+    if pid <= 2:
+        return True
+    try:
+        p = psutil.Process(pid)
+        # Check parent is kthreadd (pid 2)
+        if p.ppid() == 2:
+            return True
+        # Check run as root and systemd child (pid 1)
+        if p.uids().real == 0 and p.ppid() == 1:
+            return True
+        # List of critical process names
+        name = p.name().lower()
+        if name in ('systemd', 'gnome-shell', 'xorg', 'wayland', 'dbus-daemon', 'sddm', 'gdm3', 'kwin_wayland', 'pipewire'):
+            return True
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        # Default to safe side if we can't inspect it
+        pass
+    return False
 
 def suspend_process(pid):
     """Send SIGSTOP to a process."""

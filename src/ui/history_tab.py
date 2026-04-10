@@ -117,17 +117,41 @@ class HistoryTab(Gtk.Box):
         self.set_margin_start(12)
         self.set_margin_end(12)
 
+        header_card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_card.add_css_class("dashboard-header")
+
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        title = Gtk.Label(label="Resource History")
+        title.add_css_class("title-3")
+        title.add_css_class("panel-heading")
+        title.set_halign(Gtk.Align.START)
+        subtitle = Gtk.Label(label="See which apps used the most CPU and memory over time")
+        subtitle.add_css_class("dim-label")
+        subtitle.set_halign(Gtk.Align.START)
+        title_box.append(title)
+        title_box.append(subtitle)
+        header_card.append(title_box)
+        self.append(header_card)
+
         # Time range selector
         range_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         range_box.set_halign(Gtk.Align.CENTER)
         range_box.set_margin_bottom(4)
+        range_box.add_css_class("panel-card")
 
         self.range_buttons = {}
         self._hours = 1
-        for hours, label in [(1, "1h"), (6, "6h"), (24, "24h"), (168, "7d")]:
+        for hours, label, icon in [
+            (1, "1h", "preferences-system-time-symbolic"),
+            (6, "6h", "preferences-system-time-symbolic"),
+            (24, "24h", "x-office-calendar-symbolic"),
+            (168, "7d", "x-office-calendar-symbolic"),
+        ]:
             btn = Gtk.ToggleButton(label=label)
             btn.set_size_request(60, 32)
             btn.add_css_class("pill")
+            btn.add_css_class("icon-pill")
+            btn.set_child(self._make_range_content(label, icon))
             if hours == 1:
                 btn.set_active(True)
             btn.connect("toggled", self._on_range_changed, hours)
@@ -146,6 +170,9 @@ class HistoryTab(Gtk.Box):
         self.cpu_chart = BarChart("Top CPU Usage", value_key="avg_cpu", suffix="%")
         self.mem_chart = BarChart("Top Memory Usage", value_key="avg_mem", suffix="%")
 
+        self.cpu_chart.add_css_class("panel-card")
+        self.mem_chart.add_css_class("panel-card")
+
         charts_box.append(self.cpu_chart)
         charts_box.append(self.mem_chart)
         scroll.set_child(charts_box)
@@ -158,6 +185,8 @@ class HistoryTab(Gtk.Box):
 
         cleanup_btn = Gtk.Button(label="Clear History")
         cleanup_btn.add_css_class("flat")
+        cleanup_btn.add_css_class("danger-flat")
+        cleanup_btn.set_child(self._make_range_content("Clear History", "edit-delete-symbolic"))
         cleanup_btn.connect("clicked", self._on_cleanup)
         bottom.append(cleanup_btn)
         self.append(bottom)
@@ -167,15 +196,19 @@ class HistoryTab(Gtk.Box):
         self._timer_id = GLib.timeout_add_seconds(10, self._refresh)
 
     def _on_range_changed(self, button, hours):
+        if getattr(self, "_ignore_range_toggles", False):
+            return
         if not button.get_active():
             return
-        for h, btn in self.range_buttons.items():
-            if h != hours:
-                btn.handler_block_by_func(self._on_range_changed)
-                btn.set_active(False)
-                btn.handler_unblock_by_func(self._on_range_changed)
-        self._hours = hours
-        self._refresh()
+        self._ignore_range_toggles = True
+        try:
+            for h, btn in self.range_buttons.items():
+                if h != hours:
+                    btn.set_active(False)
+            self._hours = hours
+            self._refresh()
+        finally:
+            self._ignore_range_toggles = False
 
     def _refresh(self):
         try:
@@ -192,6 +225,17 @@ class HistoryTab(Gtk.Box):
     def _on_cleanup(self, button):
         cleanup_old(days=0)
         self._refresh()
+
+    def _make_range_content(self, label, icon_name):
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        box.set_halign(Gtk.Align.CENTER)
+        icon = Gtk.Image.new_from_icon_name(icon_name)
+        icon.set_valign(Gtk.Align.CENTER)
+        text = Gtk.Label(label=label)
+        text.set_valign(Gtk.Align.CENTER)
+        box.append(icon)
+        box.append(text)
+        return box
 
     def stop(self):
         if self._timer_id:

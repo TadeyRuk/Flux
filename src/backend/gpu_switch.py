@@ -120,13 +120,6 @@ def set_mode(mode):
     if not _envycontrol_available():
         return False, ENVYCONTROL_INSTALL_MSG, False
 
-    if _nouveau_active():
-        return False, (
-            "The open-source nouveau driver is active. "
-            "envycontrol requires the proprietary NVIDIA driver.\n\n"
-            "Install the NVIDIA driver and reboot, then try again."
-        ), False
-
     if mode in (HYBRID, DEDICATED) and not _nvidia_driver_available():
         return False, (
             "The NVIDIA kernel driver is not installed.\n\n"

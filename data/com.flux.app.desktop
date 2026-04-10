@@ -8,3 +8,5 @@ Type=Application
 Categories=System;Settings;HardwareSettings;
 Keywords=fan;power;gpu;thermal;asus;flux;
 StartupNotify=true
+X-AppVersion=1.1.0
+X-Creator=Xander Dacillo

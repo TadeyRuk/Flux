@@ -218,6 +218,35 @@ class ThermalTab(Gtk.Box):
         content.set_margin_top(4)
         scroll.set_child(content)
 
+        # Quick status header
+        header_card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_card.add_css_class("dashboard-header")
+
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        title = Gtk.Label(label="Thermal and Power")
+        title.add_css_class("title-3")
+        title.add_css_class("panel-heading")
+        title.set_halign(Gtk.Align.START)
+        subtitle = Gtk.Label(label="Tune profiles, GPU mode, and fan curves from one place")
+        subtitle.add_css_class("dim-label")
+        subtitle.set_halign(Gtk.Align.START)
+        title_box.append(title)
+        title_box.append(subtitle)
+
+        chip_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        chip_box.set_halign(Gtk.Align.END)
+        chip_box.set_hexpand(True)
+        self.profile_chip_label = Gtk.Label()
+        self.profile_chip_label.add_css_class("subtle-chip")
+        self.gpu_chip_label = Gtk.Label()
+        self.gpu_chip_label.add_css_class("subtle-chip")
+        chip_box.append(self.profile_chip_label)
+        chip_box.append(self.gpu_chip_label)
+
+        header_card.append(title_box)
+        header_card.append(chip_box)
+        content.append(header_card)
+
         # --- Power Profile Section ---
         profile_group = Adw.PreferencesGroup(title="Power Profile")
         content.append(profile_group)
@@ -232,6 +261,11 @@ class ThermalTab(Gtk.Box):
         for profile in PROFILES:
             btn = Gtk.ToggleButton(label=PROFILE_LABELS[profile])
             btn.set_size_request(130, 45)
+            btn.add_css_class("icon-pill")
+            btn.set_child(self._make_button_content(
+                PROFILE_LABELS[profile],
+                PROFILE_ICONS.get(profile, "power-profile-balanced-symbolic"),
+            ))
             if profile == current:
                 btn.set_active(True)
             btn.connect("toggled", self._on_profile_toggled, profile)
@@ -241,6 +275,7 @@ class ThermalTab(Gtk.Box):
 
         row = Adw.ActionRow(title="Active Profile")
         row.set_subtitle(f"Current: {PROFILE_LABELS.get(current, current)}")
+        row.add_prefix(Gtk.Image.new_from_icon_name("power-profile-performance-symbolic"))
         self.profile_status_row = row
         profile_group.add(row)
 
@@ -266,6 +301,13 @@ class ThermalTab(Gtk.Box):
         for mode in [INTEGRATED, HYBRID, DEDICATED]:
             btn = Gtk.ToggleButton(label=MODE_LABELS[mode])
             btn.set_size_request(160, 45)
+            icon_name = {
+                INTEGRATED: "computer-symbolic",
+                HYBRID: "video-display-symbolic",
+                DEDICATED: "video-card-symbolic",
+            }.get(mode, "video-display-symbolic")
+            btn.set_child(self._make_button_content(MODE_LABELS[mode], icon_name))
+            btn.add_css_class("icon-pill")
             if mode == gpu_mode:
                 btn.set_active(True)
             if mode in (HYBRID, DEDICATED) and not nvidia_usable:
@@ -288,6 +330,7 @@ class ThermalTab(Gtk.Box):
             title="dGPU (NVIDIA RTX)",
             subtitle=_gpu_subtitle(dgpu_info),
         )
+        status_row.add_prefix(Gtk.Image.new_from_icon_name("video-card-symbolic"))
         if not dgpu_info["envycontrol_available"]:
             status_row.set_subtitle(
                 "envycontrol not installed — GPU switching unavailable. "
@@ -316,6 +359,7 @@ class ThermalTab(Gtk.Box):
 
         # Profile selector row
         profile_row = Adw.ActionRow(title="Profile")
+        profile_row.add_prefix(Gtk.Image.new_from_icon_name("document-properties-symbolic"))
         self._profile_model = Gtk.StringList()
         self._rebuild_profile_model()
         self._profile_dropdown = Gtk.DropDown(model=self._profile_model)
@@ -343,9 +387,12 @@ class ThermalTab(Gtk.Box):
             title="Swap Fan Mapping",
             subtitle="Switch which physical fan corresponds to which control curve",
         )
+        swap_row.add_prefix(Gtk.Image.new_from_icon_name("object-flip-horizontal-symbolic"))
         self._swap_switch = Gtk.Switch()
         self._swap_switch.set_valign(Gtk.Align.CENTER)
-        self._swap_switch.set_active(True)  # Default to True as it was hardcoded before
+        # Prefer native fan_id->pwm_id mapping by default; users can enable swap
+        # for devices where firmware wiring is reversed.
+        self._swap_switch.set_active(False)
         self._swap_switch.connect("state-set", self._on_swap_toggled)
         swap_row.add_suffix(self._swap_switch)
         fan_group.add(swap_row)
@@ -364,6 +411,7 @@ class ThermalTab(Gtk.Box):
             curve_id = self._curve_id_map.get(fan_id, fan_id)
 
             frame = Gtk.Frame()
+            frame.add_css_class("panel-card")
             frame.set_margin_top(4)
             frame.set_margin_bottom(4)
             frame_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -373,6 +421,8 @@ class ThermalTab(Gtk.Box):
             frame_box.set_margin_end(8)
 
             header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            fan_icon = Gtk.Image.new_from_icon_name("preferences-system-symbolic")
+            header.append(fan_icon)
             title = Gtk.Label(label=f"{label} — {rpm} RPM")
             title.add_css_class("heading")
             title.set_halign(Gtk.Align.START)
@@ -412,11 +462,13 @@ class ThermalTab(Gtk.Box):
 
         apply_btn = Gtk.Button(label="Apply Fan Curves")
         apply_btn.add_css_class("suggested-action")
+        apply_btn.set_child(self._make_button_content("Apply Fan Curves", "object-select-symbolic"))
         apply_btn.connect("clicked", self._on_apply_fan_curves)
         apply_box.append(apply_btn)
 
         reset_btn = Gtk.Button(label="Reset to Default")
         reset_btn.add_css_class("flat")
+        reset_btn.set_child(self._make_button_content("Reset to Default", "edit-undo-symbolic"))
         reset_btn.connect("clicked", self._on_reset_fan_curves)
         apply_box.append(reset_btn)
 
@@ -432,15 +484,32 @@ class ThermalTab(Gtk.Box):
             title="CPU (k10temp)",
             subtitle=f"{cpu_temp:.1f} C" if cpu_temp else "N/A",
         )
+        self.cpu_temp_row.add_prefix(Gtk.Image.new_from_icon_name("utilities-system-monitor-symbolic"))
         self.gpu_temp_row = Adw.ActionRow(
             title="iGPU (amdgpu)",
             subtitle=f"{gpu_temp:.1f} C" if gpu_temp else "N/A",
         )
+        self.gpu_temp_row.add_prefix(Gtk.Image.new_from_icon_name("video-card-symbolic"))
         temp_group.add(self.cpu_temp_row)
         temp_group.add(self.gpu_temp_row)
 
+        self.profile_chip_label.set_text(f"Profile: {PROFILE_LABELS.get(current, current)}")
+        self.gpu_chip_label.set_text(f"GPU: {MODE_LABELS.get(gpu_mode, gpu_mode)}")
+
         # Update temps periodically
         GLib.timeout_add_seconds(2, self._update_temps)
+
+    def _make_button_content(self, label, icon_name):
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        box.set_halign(Gtk.Align.CENTER)
+        icon = Gtk.Image.new_from_icon_name(icon_name)
+        icon.set_valign(Gtk.Align.CENTER)
+        text = Gtk.Label(label=label)
+        text.add_css_class("metric-label")
+        text.set_valign(Gtk.Align.CENTER)
+        box.append(icon)
+        box.append(text)
+        return box
 
     def _update_curve_id_map(self):
         """Build curve_id mapping based on hardware labels or user swap setting."""
@@ -472,69 +541,87 @@ class ThermalTab(Gtk.Box):
     def _on_swap_toggled(self, switch, state):
         self._update_curve_id_map()
         # Refresh current curve data from hardware with new mapping
-        for fan_id, curve in self.fan_curves.items():
-            curve.points = get_fan_curve(curve.curve_id) or list(curve.DEFAULT_POINTS)
-            curve.queue_draw()
+        self._ignore_fan_toggles = getattr(self, "_ignore_fan_toggles", False)
+        self._ignore_fan_toggles = True
+        try:
+            for fan_id, curve in self.fan_curves.items():
+                curve.points = get_fan_curve(curve.curve_id) or list(curve.DEFAULT_POINTS)
+                curve.queue_draw()
+                # Keep switch state aligned with the newly mapped curve id.
+                self.fan_toggles[fan_id].set_active(get_fan_curve_enabled(curve.curve_id))
+        finally:
+            self._ignore_fan_toggles = False
         return False
 
     def _on_profile_toggled(self, button, profile):
+        if getattr(self, "_ignore_profile_toggles", False):
+            return
         if not button.get_active():
             return
-        # Unset others
-        for p, btn in self.profile_buttons.items():
-            if p != profile:
-                btn.handler_block_by_func(self._on_profile_toggled)
-                btn.set_active(False)
-                btn.handler_unblock_by_func(self._on_profile_toggled)
-        ok, err = set_active_profile(profile)
-        if ok:
-            self.profile_status_row.set_subtitle(f"Current: {PROFILE_LABELS[profile]}")
-        else:
-            self.profile_status_row.set_subtitle(f"Error: {err}")
+        self._ignore_profile_toggles = True
+        try:
+            # Unset others
+            for p, btn in self.profile_buttons.items():
+                if p != profile:
+                    btn.set_active(False)
+            ok, err = set_active_profile(profile)
+            if ok:
+                self.profile_status_row.set_subtitle(f"Current: {PROFILE_LABELS[profile]}")
+                self.profile_chip_label.set_text(f"Profile: {PROFILE_LABELS[profile]}")
+            else:
+                self.profile_status_row.set_subtitle(f"Error: {err}")
+        finally:
+            self._ignore_profile_toggles = False
 
     def _on_gpu_toggled(self, button, mode):
+        if getattr(self, "_ignore_gpu_toggles", False):
+            return
         if not button.get_active():
             return
-        prev_mode = next((m for m, b in self.gpu_buttons.items() if b.get_active() and m != mode), None)
-        for m, btn in self.gpu_buttons.items():
-            if m != mode:
-                btn.handler_block_by_func(self._on_gpu_toggled)
-                btn.set_active(False)
-                btn.handler_unblock_by_func(self._on_gpu_toggled)
+        
+        self._ignore_gpu_toggles = True
+        try:
+            prev_mode = next((m for m, b in self.gpu_buttons.items() if b.get_active() and m != mode), None)
+            for m, btn in self.gpu_buttons.items():
+                if m != mode:
+                    btn.set_active(False)
 
-        ok, msg, needs_reboot = set_mode(mode)
-        if needs_reboot:
-            dialog = Adw.MessageDialog(
-                heading="Reboot Required",
-                body=msg,
-                transient_for=self.get_root(),
-            )
-            dialog.add_response("ok", "OK")
-            dialog.present()
-        elif not ok:
-            # Revert button to previous mode
-            button.handler_block_by_func(self._on_gpu_toggled)
-            button.set_active(False)
-            button.handler_unblock_by_func(self._on_gpu_toggled)
-            if prev_mode and prev_mode in self.gpu_buttons:
-                self.gpu_buttons[prev_mode].handler_block_by_func(self._on_gpu_toggled)
-                self.gpu_buttons[prev_mode].set_active(True)
-                self.gpu_buttons[prev_mode].handler_unblock_by_func(self._on_gpu_toggled)
-            dialog = Adw.MessageDialog(
-                heading="GPU Switch Failed",
-                body=msg,
-                transient_for=self.get_root(),
-            )
-            dialog.add_response("ok", "OK")
-            dialog.present()
+            ok, msg, needs_reboot = set_mode(mode)
+            if needs_reboot:
+                dialog = Adw.MessageDialog(
+                    heading="Reboot Required",
+                    body=msg,
+                    transient_for=self.get_root(),
+                )
+                dialog.add_response("ok", "OK")
+                dialog.present()
+            elif not ok:
+                # Revert button to previous mode
+                button.set_active(False)
+                if prev_mode and prev_mode in self.gpu_buttons:
+                    self.gpu_buttons[prev_mode].set_active(True)
+                dialog = Adw.MessageDialog(
+                    heading="GPU Switch Failed",
+                    body=msg,
+                    transient_for=self.get_root(),
+                )
+                dialog.add_response("ok", "OK")
+                dialog.present()
+            else:
+                self.gpu_chip_label.set_text(f"GPU: {MODE_LABELS.get(mode, mode)}")
+        finally:
+            self._ignore_gpu_toggles = False
 
     def _on_fan_enable_toggled(self, switch, state, fan_id):
+        if getattr(self, "_ignore_fan_toggles", False):
+            return False
+
         curve = self.fan_curves.get(fan_id)
         if not curve:
-            return True
+            return False
         
-        # If enabling, use apply_fan_curve to write current widget points
-        # If disabling, just set enable to 0
+        # If enabling, use apply_fan_curve to write current widget points.
+        # If disabling, switch controller out of custom curve mode.
         if state:
             ok, err = apply_fan_curve(curve.curve_id, curve.points, enabled=True)
         else:
@@ -551,7 +638,14 @@ class ThermalTab(Gtk.Box):
                 )
                 dialog.add_response("ok", "OK")
                 dialog.present()
-        return True  # Prevent default handler
+            return True  # Block state change on failure.
+
+        return False  # Allow default handler on success.
+
+    def _notify(self, message):
+        root = self.get_root()
+        if root and hasattr(root, "show_notification"):
+            root.show_notification(message)
 
     def _on_apply_fan_curves(self, button):
         for fan_id, curve in self.fan_curves.items():
@@ -567,20 +661,61 @@ class ThermalTab(Gtk.Box):
                 dialog.present()
                 return
 
+            # Verify values were persisted by reading them back from sysfs.
+            readback = get_fan_curve(curve.curve_id)
+            expected = [(int(t), int(p)) for t, p in curve.points]
+            if readback[:len(expected)] != expected:
+                dialog = Adw.MessageDialog(
+                    heading="Fan Curve Verification Failed",
+                    body=(
+                        f"Fan {fan_id} ({curve.curve_id}) was applied but readback "
+                        "does not match requested values."
+                    ),
+                    transient_for=self.get_root(),
+                )
+                dialog.add_response("ok", "OK")
+                dialog.present()
+                return
+
+            if not get_fan_curve_enabled(curve.curve_id):
+                dialog = Adw.MessageDialog(
+                    heading="Fan Curve Verification Failed",
+                    body=f"Fan {fan_id} ({curve.curve_id}) is not enabled after apply.",
+                    transient_for=self.get_root(),
+                )
+                dialog.add_response("ok", "OK")
+                dialog.present()
+                return
+
+        # Applying curves always enables them; keep switches in sync.
+        self._ignore_fan_toggles = getattr(self, "_ignore_fan_toggles", False)
+        self._ignore_fan_toggles = True
+        try:
+            for fan_id, toggle in self.fan_toggles.items():
+                toggle.set_active(True)
+        finally:
+            self._ignore_fan_toggles = False
+
+        self._notify("Fan curve configuration applied")
+
     def _on_reset_fan_curves(self, button):
         defaults = get_default()
-        for fan_id, curve in self.fan_curves.items():
-            set_fan_curve_enabled(curve.curve_id, False)
-            toggle = self.fan_toggles[fan_id]
-            toggle.handler_block_by_func(self._on_fan_enable_toggled)
-            toggle.set_active(False)
-            toggle.handler_unblock_by_func(self._on_fan_enable_toggled)
-            if defaults:
-                curve.points = list(defaults[f"fan{fan_id}"])
-            else:
-                curve.points = list(curve.DEFAULT_POINTS)
-            curve.dragging = -1
-            curve.queue_draw()
+        
+        self._ignore_fan_toggles = getattr(self, "_ignore_fan_toggles", False)
+        self._ignore_fan_toggles = True
+        try:
+            for fan_id, curve in self.fan_curves.items():
+                set_fan_curve_enabled(curve.curve_id, False)
+                toggle = self.fan_toggles[fan_id]
+                toggle.set_active(False)
+                if defaults and defaults.get(f"fan{fan_id}"):
+                    curve.points = list(defaults[f"fan{fan_id}"])
+                else:
+                    curve.points = list(curve.DEFAULT_POINTS)
+                curve.dragging = -1
+                curve.queue_draw()
+        finally:
+            self._ignore_fan_toggles = False
         # Select "Default" in dropdown
         self._profile_dropdown.set_selected(0)
 
@@ -599,9 +734,7 @@ class ThermalTab(Gtk.Box):
         if idx == 0:
             # Default selected
             self._delete_btn.set_sensitive(False)
-            defaults = get_default()
-            if defaults:
-                self._load_points(defaults)
+            self._load_default_points()
         elif idx != Gtk.INVALID_LIST_POSITION:
             name = self._profile_model.get_string(idx)
             self._delete_btn.set_sensitive(True)
@@ -617,6 +750,17 @@ class ThermalTab(Gtk.Box):
                 curve.points = list(data[key])
                 curve.dragging = -1
                 curve.queue_draw()
+
+    def _load_default_points(self):
+        """Load per-fan default curves into the fan widgets."""
+        defaults = get_default()
+        for fan_id, curve in self.fan_curves.items():
+            if defaults and defaults.get(f"fan{fan_id}"):
+                curve.points = list(defaults[f"fan{fan_id}"])
+            else:
+                curve.points = list(curve.DEFAULT_POINTS)
+            curve.dragging = -1
+            curve.queue_draw()
 
     def _on_add_profile(self, button):
         dialog = Adw.MessageDialog(
