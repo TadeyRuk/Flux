@@ -128,5 +128,5 @@ data/
 
 ## License
 
-No license file is currently included in this repository.
-Add a `LICENSE` file to define redistribution and usage terms for production distribution.
+This project is licensed under the MIT License.
+See the LICENSE file for full terms.
