@@ -4,6 +4,9 @@ import subprocess
 
 
 PROFILES = ["power-saver", "balanced", "performance"]
+
+CUSTOM_LABEL = "Custom"
+CUSTOM_ICON = "preferences-system-symbolic"
 PROFILE_LABELS = {
     "power-saver": "Eco",
     "balanced": "Balanced",

@@ -54,33 +54,59 @@ class PowerControlWindow(Adw.ApplicationWindow):
 
         box.append(header)
 
-        # Tab view
-        self.tab_view = Adw.TabView()
-        tab_bar = Adw.TabBar()
-        tab_bar.set_view(self.tab_view)
-        tab_bar.add_css_class("flat")
-        box.append(tab_bar)
-        box.append(self.tab_view)
+        self.stack = Gtk.Stack()
+        self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
 
         # Add tabs
         self.thermal_tab = ThermalTab()
-        page1 = self.tab_view.append(self.thermal_tab)
-        page1.set_title("Thermal & Power")
-        page1.set_icon(Gio.ThemedIcon.new("power-profile-performance-symbolic"))
+        self.stack.add_named(self.thermal_tab, "thermal")
 
         self.monitor_tab = MonitorTab()
-        page2 = self.tab_view.append(self.monitor_tab)
-        page2.set_title("System Monitor")
-        page2.set_icon(Gio.ThemedIcon.new("utilities-system-monitor-symbolic"))
+        self.stack.add_named(self.monitor_tab, "monitor")
 
         self.history_tab = HistoryTab()
-        page3 = self.tab_view.append(self.history_tab)
-        page3.set_title("Resource History")
-        page3.set_icon(Gio.ThemedIcon.new("view-statistics-symbolic"))
+        self.stack.add_named(self.history_tab, "history")
+
+        self.overlay = Gtk.Overlay()
+        self.overlay.set_child(self.stack)
+
+        # Nav bar
+        self.nav_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        self.nav_bar.add_css_class("bottom-nav")
+        self.nav_bar.set_halign(Gtk.Align.CENTER)
+        self.nav_bar.set_valign(Gtk.Align.END)
+        self.nav_bar.set_margin_bottom(24)
+
+        # Create buttons
+        self.nav_buttons = {}
+        for name, icon in [
+            ("thermal", "temperature-symbolic"),
+            ("monitor", "system-run-symbolic"),
+            ("history", "office-calendar-symbolic"),
+        ]:
+            btn = Gtk.ToggleButton(icon_name=icon)
+            btn.add_css_class("nav-btn")
+            btn.connect("toggled", self._on_nav_toggled, name)
+            self.nav_bar.append(btn)
+            self.nav_buttons[name] = btn
+
+        self.nav_buttons["thermal"].set_active(True)
+        self.overlay.add_overlay(self.nav_bar)
+
+        box.append(self.overlay)
+        box.set_vexpand(True)
+        self.overlay.set_vexpand(True)
 
         self.toast_overlay = Adw.ToastOverlay()
         self.toast_overlay.set_child(box)
         self.set_content(self.toast_overlay)
+
+    def _on_nav_toggled(self, button, name):
+        if button.get_active():
+            self.stack.set_visible_child_name(name)
+            for other_name, other_btn in self.nav_buttons.items():
+                if other_name != name and other_btn.get_active():
+                    other_btn.set_active(False)
 
     def show_notification(self, message, timeout=3):
         toast = Adw.Toast.new(message)
